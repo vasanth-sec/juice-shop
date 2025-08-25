@@ -22,7 +22,7 @@ jobs:
         PR_ID: ${{ github.event.pull_request.number }}
         COMMIT_HASH: ${{ github.event.pull_request.head.sha }}
         REPO_URL: ${{ github.event.pull_request.head.repo.clone_url }}
-        API_URL: http://13.200.250.130:5000 
+        API_URL: http://13.200.250.130:5000/scan_pr
       run: |
         echo "Sending scan to $API_URL..."
         RESPONSE=$(curl --max-time 300 --connect-timeout 10 -s -X POST "$API_URL/scan_pr" \
