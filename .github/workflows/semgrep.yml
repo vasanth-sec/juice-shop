@@ -1,4 +1,4 @@
-name: PR Security Scan
+name: PR Semgrep Scan
 
 on:
   pull_request:
@@ -6,39 +6,43 @@ on:
       - master
 
 jobs:
-  semgrep_scan:
+  security_scan:
     runs-on: ubuntu-latest
-    outputs:
-      scan-status: ${{ steps.scan.outputs.status }}
-
     steps:
-    - uses: actions/checkout@v3
-      with:
-        fetch-depth: 0
+      - uses: actions/checkout@v3
 
-    - name: Run Semgrep scan via FastAPI
-      id: scan
-      env:
-        PR_ID: ${{ github.event.pull_request.number }}
-        COMMIT_HASH: ${{ github.event.pull_request.head.sha }}
-        REPO_URL: ${{ github.event.pull_request.head.repo.clone_url }}
-        API_URL: http://13.200.250.130:5000
-      run: |
-        echo "Sending scan to $API_URL..."
-        RESPONSE=$(curl --max-time 300 --connect-timeout 10 -s -X POST "$API_URL/scan_pr" \
-          -H "Content-Type: application/json" \
-          -d "{\"pr_id\": \"$PR_ID\", \"repo_url\": \"$REPO_URL\", \"commit_hash\": \"$COMMIT_HASH\", \"pr_url\": \"${{ github.event.pull_request.html_url }}\"}")
-        echo "$RESPONSE" > response.json
-        STATUS=$(echo "$RESPONSE" | jq -r '.status')
-        echo "::set-output name=status::$STATUS"
+      - name: Call Semgrep FastAPI scanner
+        id: scan
+        env:
+          API_URL: ${{ secrets.SEMGREP_API_URL }}
+        run: |
+          PR_ID="${{ github.event.pull_request.number }}"
+          COMMIT="${{ github.event.pull_request.head.sha }}"
+          REPO="${{ github.event.pull_request.head.repo.clone_url }}"
+          PR_URL="${{ github.event.pull_request.html_url }}"
 
-    - name: Fail if scan blocked
-      if: steps.scan.outputs.status == 'blocked'
-      run: |
-        echo "Critical/high severity vulnerabilities detected, blocking merge."
-        cat response.json
-        exit 1
+          RESPONSE=$(curl -s -X POST "$API_URL/scan_pr" \
+            -H "Content-Type: application/json" \
+            -d "{\"pr_id\": \"$PR_ID\", \"repo_url\": \"$REPO\", \"commit_hash\": \"$COMMIT\", \"pr_url\": \"$PR_URL\"}")
 
-    - name: Success message
-      if: steps.scan.outputs.status != 'blocked'
-      run: echo "No critical/high vulnerabilities found. PR is safe to merge."
+          echo "$RESPONSE" > response.json
+          echo "SCAN_STATUS=$(jq -r '.status' response.json)" >> $GITHUB_ENV
+          echo "SCAN_ID=$(jq -r '.scan_id // \"\"' response.json)" >> $GITHUB_ENV
+
+      - name: Wait for Approval
+        if: env.SCAN_STATUS == 'blocked'
+        run: |
+          echo "Waiting for security approval..."
+          for i in {1..30}; do
+            STATUS=$(curl -s "$API_URL/status/$SCAN_ID" | jq -r '.status')
+            echo "Approval status: $STATUS"
+            if [[ "$STATUS" == "approve" ]]; then
+              exit 0
+            elif [[ "$STATUS" == "reject" ]]; then
+              echo "Rejected by security"
+              exit 1
+            fi
+            sleep 20
+          done
+          echo "Timeout waiting for approval"
+          exit 1
