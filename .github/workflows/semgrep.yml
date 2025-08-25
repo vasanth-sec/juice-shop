@@ -1,53 +1,43 @@
-name: Semgrep PR Scan
+name: PR Security Scan
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize]
+    branches:
+      - master
 
 jobs:
   semgrep_scan:
     runs-on: ubuntu-latest
+    outputs:
+      scan-status: ${{ steps.scan.outputs.status }}
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
 
-      - name: Call FastAPI Semgrep Scanner
-        id: call_api
-        run: |
-          PR_ID=${{ github.event.pull_request.number }}
-          COMMIT_HASH=${{ github.sha }}
-          REPO_URL=${{ github.event.repository.clone_url }}
-          API_URL=${{ secrets.SEMGREP_API_URL }}
+    - name: Run Semgrep scan via FastAPI
+      id: scan
+      env:
+        PR_ID: ${{ github.event.pull_request.number }}
+        COMMIT_HASH: ${{ github.event.pull_request.head.sha }}
+        REPO_URL: ${{ github.event.pull_request.head.repo.clone_url }}
+        API_URL: ${{ secrets.SEMGREP_API_URL }}
+      run: |
+        RESPONSE=$(curl -s -X POST "$API_URL/scan_pr" \
+          -H "Content-Type: application/json" \
+          -d "{\"pr_id\": \"$PR_ID\", \"repo_url\": \"$REPO_URL\", \"commit_hash\": \"$COMMIT_HASH\", \"pr_url\": \"${{ github.event.pull_request.html_url }}\"}")
+        echo "$RESPONSE" > response.json
+        STATUS=$(echo "$RESPONSE" | jq -r '.status')
+        echo "::set-output name=status::$STATUS"
 
-          echo "Sending scan request to FastAPI..."
+    - name: Fail if scan blocked
+      if: steps.scan.outputs.status == 'blocked'
+      run: |
+        echo "Critical/high severity vulnerabilities detected, blocking merge."
+        exit 1
 
-          RESPONSE=$(curl -s -X POST "$API_URL/scan_pr" \
-            -H "Content-Type: application/json" \
-            -d "{\"pr_id\": \"$PR_ID\", \"repo_url\": \"$REPO_URL\", \"commit_hash\": \"$COMMIT_HASH\"}")
+    - name: Success message
+      if: steps.scan.outputs.status != 'blocked'
+      run: echo "No critical/high vulnerabilities found."
 
-          echo "$RESPONSE" > response.json
-          STATUS=$(echo "$RESPONSE" | jq -r '.status')
-
-          echo "Scan Status: $STATUS"
-          echo "::set-output name=status::$STATUS"
-
-      - name: Fail if high/critical findings
-        if: steps.call_api.outputs.status == 'blocked'
-        run: |
-          echo "Critical/High severity issues found. PR requires manual security approval."
-          exit 1
-
-      - name: Notify Slack if PR is blocked
-        if: steps.call_api.outputs.status == 'blocked'
-        uses: slackapi/slack-github-action@v1.23.0
-        with:
-          slack-message: |
-            :rotating_light: *Security Alert for PR #${{ github.event.pull_request.number }}*
-
-            Critical or High severity vulnerabilities were found by Semgrep.
-
-            ➤ To review findings: `/pr_findings ${{ github.event.pull_request.number }}`
-            ➤ To approve: `/approve_pr ${{ github.event.pull_request.number }}`
-
-          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
