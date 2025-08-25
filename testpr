@@ -1,0 +1,43 @@
+name: PR Security Scan
+
+on:
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  semgrep_scan:
+    runs-on: ubuntu-latest
+    outputs:
+      scan-status: ${{ steps.scan.outputs.status }}
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+
+    - name: Run Semgrep scan via FastAPI
+      id: scan
+      env:
+        PR_ID: ${{ github.event.pull_request.number }}
+        COMMIT_HASH: ${{ github.event.pull_request.head.sha }}
+        REPO_URL: ${{ github.event.pull_request.head.repo.clone_url }}
+        API_URL: ${{ secrets.SEMGREP_API_URL }}
+      run: |
+        RESPONSE=$(curl -s -X POST "$API_URL/scan_pr" \
+          -H "Content-Type: application/json" \
+          -d "{\"pr_id\": \"$PR_ID\", \"repo_url\": \"$REPO_URL\", \"commit_hash\": \"$COMMIT_HASH\", \"pr_url\": \"${{ github.event.pull_request.html_url }}\"}")
+        echo "$RESPONSE" > response.json
+        STATUS=$(echo "$RESPONSE" | jq -r '.status')
+        echo "::set-output name=status::$STATUS"
+
+    - name: Fail if scan blocked
+      if: steps.scan.outputs.status == 'blocked'
+      run: |
+        echo "Critical/high severity vulnerabilities detected, blocking merge."
+        exit 1
+
+    - name: Success message
+      if: steps.scan.outputs.status != 'blocked'
+      run: echo "No critical/high vulnerabilities found."
+
