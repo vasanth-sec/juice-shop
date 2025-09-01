@@ -26,17 +26,26 @@ jobs:
             -d "{\"pr_id\": \"$PR_ID\", \"repo_url\": \"$REPO\", \"commit_hash\": \"$COMMIT\", \"pr_url\": \"$PR_URL\"}")
 
           echo "$RESPONSE" > response.json
-          echo "SCAN_STATUS=$(jq -r '.status' response.json)" >> $GITHUB_ENV
-          echo "SCAN_ID=$(jq -r '.scan_id // \"\"' response.json)" >> $GITHUB_ENV
+          
+          # Use 'empty' fallback to avoid jq parsing errors
+          SCAN_STATUS=$(jq -r '.status // empty' response.json)
+          SCAN_ID=$(jq -r '.scan_id // empty' response.json)
+
+          echo "SCAN_STATUS=$SCAN_STATUS" >> $GITHUB_ENV
+          echo "SCAN_ID=$SCAN_ID" >> $GITHUB_ENV
 
       - name: Wait for Approval
         if: env.SCAN_STATUS == 'blocked'
+        env:
+          API_URL: ${{ secrets.SEMGREP_API_URL }}
+          SCAN_ID: ${{ env.SCAN_ID }}
         run: |
           echo "Waiting for security approval..."
           for i in {1..30}; do
             STATUS=$(curl -s "$API_URL/status/$SCAN_ID" | jq -r '.status')
             echo "Approval status: $STATUS"
             if [[ "$STATUS" == "approve" ]]; then
+              echo "Approved! Proceeding..."
               exit 0
             elif [[ "$STATUS" == "reject" ]]; then
               echo "Rejected by security"
