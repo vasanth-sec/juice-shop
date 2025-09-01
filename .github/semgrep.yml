@@ -1,0 +1,48 @@
+name: PR Semgrep Scan
+
+on:
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  security_scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Call Semgrep FastAPI scanner
+        id: scan
+        env:
+          API_URL: ${{ secrets.SEMGREP_API_URL }}
+        run: |
+          PR_ID="${{ github.event.pull_request.number }}"
+          COMMIT="${{ github.event.pull_request.head.sha }}"
+          REPO="${{ github.event.pull_request.head.repo.clone_url }}"
+          PR_URL="${{ github.event.pull_request.html_url }}"
+
+          RESPONSE=$(curl -s -X POST "$API_URL/scan_pr" \
+            -H "Content-Type: application/json" \
+            -d "{\"pr_id\": \"$PR_ID\", \"repo_url\": \"$REPO\", \"commit_hash\": \"$COMMIT\", \"pr_url\": \"$PR_URL\"}")
+
+          echo "$RESPONSE" > response.json
+          echo "SCAN_STATUS=$(jq -r '.status' response.json)" >> $GITHUB_ENV
+          echo "SCAN_ID=$(jq -r '.scan_id // \"\"' response.json)" >> $GITHUB_ENV
+
+      - name: Wait for Approval
+        if: env.SCAN_STATUS == 'blocked'
+        run: |
+          echo "Waiting for security approval..."
+          for i in {1..30}; do
+            STATUS=$(curl -s "$API_URL/status/$SCAN_ID" | jq -r '.status')
+            echo "Approval status: $STATUS"
+            if [[ "$STATUS" == "approve" ]]; then
+              exit 0
+            elif [[ "$STATUS" == "reject" ]]; then
+              echo "Rejected by security"
+              exit 1
+            fi
+            sleep 20
+          done
+          echo "Timeout waiting for approval"
+          exit 1
