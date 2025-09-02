@@ -5,9 +5,14 @@ on:
     branches:
       - master
 
+permissions:
+  contents: read
+  security-events: write
+
 jobs:
   security_scan:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v3
 
@@ -26,13 +31,14 @@ jobs:
             -d "{\"pr_id\": \"$PR_ID\", \"repo_url\": \"$REPO\", \"commit_hash\": \"$COMMIT\", \"pr_url\": \"$PR_URL\"}")
 
           echo "$RESPONSE" > response.json
-          
-          # Use 'empty' fallback to avoid jq parsing errors
-          SCAN_STATUS=$(jq -r '.status // empty' response.json)
-          SCAN_ID=$(jq -r '.scan_id // empty' response.json)
+
+          SCAN_STATUS=$(jq -r '.status' response.json)
+          SCAN_ID=$(jq -r '.scan_id' response.json)
+          SARIF_FILE=$(jq -r '.sarif_file' response.json)
 
           echo "SCAN_STATUS=$SCAN_STATUS" >> $GITHUB_ENV
           echo "SCAN_ID=$SCAN_ID" >> $GITHUB_ENV
+          echo "SARIF_FILE=$SARIF_FILE" >> $GITHUB_ENV
 
       - name: Wait for Approval
         if: env.SCAN_STATUS == 'blocked'
@@ -55,3 +61,9 @@ jobs:
           done
           echo "Timeout waiting for approval"
           exit 1
+
+      - name: Upload SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ env.SARIF_FILE }}
+        if: always()
