@@ -5,9 +5,14 @@ on:
     branches:
       - master
 
+permissions:
+  contents: read
+  security-events: write
+
 jobs:
   security_scan:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v3
 
@@ -25,16 +30,29 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{\"pr_id\": \"$PR_ID\", \"repo_url\": \"$REPO\", \"commit_hash\": \"$COMMIT\", \"pr_url\": \"$PR_URL\"}")
 
+          # Write the response to a file
           echo "$RESPONSE" > response.json
-          
-          # Use 'empty' fallback to avoid jq parsing errors
-          SCAN_STATUS=$(jq -r '.status // empty' response.json)
-          SCAN_ID=$(jq -r '.scan_id // empty' response.json)
 
+          # Extract values from the JSON response
+          SCAN_STATUS=$(jq -r '.status // "empty"' response.json)
+          SCAN_ID=$(jq -r '.scan_id // "empty"' response.json)
+          SARIF_FILE=$(jq -r '.sarif_file // ""' response.json)
+
+          # Set environment variables for subsequent steps
           echo "SCAN_STATUS=$SCAN_STATUS" >> $GITHUB_ENV
           echo "SCAN_ID=$SCAN_ID" >> $GITHUB_ENV
+          echo "SARIF_FILE=$SARIF_FILE" >> $GITHUB_ENV
+
+      - name: Upload SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ env.SARIF_FILE }}
+        # This step will run on both success and failure of the previous step
+        # to ensure the SARIF file is uploaded if generated.
+        if: success() || failure()
 
       - name: Wait for Approval
+        # This step only runs if the scan status is 'blocked'
         if: env.SCAN_STATUS == 'blocked'
         env:
           API_URL: ${{ secrets.SEMGREP_API_URL }}
